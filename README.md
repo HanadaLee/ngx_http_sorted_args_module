@@ -36,7 +36,7 @@ http {
     text/html   html;
   }
 
-  log_format main  '[$time_local] $host "$request" $request_time s '
+  log_format main  '[$time_local] $host "$request" $request_time '
                  '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
                  'cache_status: "$upstream_cache_status" args: "$args '
                  'sorted_args: "$sorted_args" ';
@@ -52,7 +52,7 @@ http {
     access_log       logs/nginx-http_access.log main;
 
     location /filtered {
-      sorted_args_filter v _ time b;
+      sorted_args_filter keep -i v _ time b;
 
       proxy_set_header Host "static_files_server";
       proxy_pass http://localhost:8081;
@@ -91,7 +91,56 @@ Variables
 Directives
 ----------
 
-* **sorted_args_filter** - list parameters to be filtered while using the `$sorted_args` variable.
+**sorted_args_filter**
+
+**Syntax:** *sorted_args_filter keep [-i] args ...;* | *sorted_args_filter clear [-i] args ...;*
+
+**Default:** *-*
+
+**Context:** *http, server, location, if in location*
+
+list parameters to be filtered while using the `$sorted_args` variable.
+
+The directive supports two modes:
+- **keep**: Only keep the specified parameters, remove all others
+- **clear**: Remove the specified parameters, keep all others
+
+Optional **-i** parameter enables case-insensitive parameter matching.
+
+Examples:
+```nginx
+# Keep only 'id' and 'name' parameters (case-sensitive)
+sorted_args_filter keep id name;
+
+# Keep only 'id' and 'name' parameters (case-insensitive)
+sorted_args_filter keep -i id name;
+
+# Remove 'token' and 'session' parameters, keep all others
+sorted_args_filter clear token session;
+
+# Remove 'token' and 'session' parameters (case-insensitive)
+sorted_args_filter clear -i token session;
+```
+
+**sorted_args_clear_empty_args**
+
+**Syntax:** *sorted_args_clear_empty_args on | off;*
+
+**Default:** *off*
+
+**Context:** *http, server, location, if in location*
+
+If enabled, removes parameters that have no value (e.g., `key` or `key=`).
+
+Examples:
+```nginx
+# Enable clearing empty args
+sorted_args_clear_empty_args on;
+
+# Input:  ?a=1&b=&c&d=2
+# Output: a=1&d=2
+# (b= and c are removed)
+```
 
 
 <a id="installation"></a>Installation Instructions
