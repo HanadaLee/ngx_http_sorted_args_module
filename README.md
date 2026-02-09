@@ -137,10 +137,43 @@ Examples:
 # Enable clearing empty args
 sorted_args_clear_empty_args on;
 
-# Input:  ?a=1&b=&c&d=2
+# Input:  a=1&b=&c&d=2
 # Output: a=1&d=2
 # (b= and c are removed)
 ```
+
+**sorted_args_overwrite**
+
+**Syntax:** *sorted_args_overwrite on | off;*
+
+**Default:** *off*
+
+**Context:** *http, server, location, if in location*
+
+If enabled, overrides the original `$args` with the sorted and filtered result. This allows downstream modules and proxy_pass to use the sorted arguments directly.
+
+Examples:
+```nginx
+location /api {
+    # Enable overwriting original args
+    sorted_args_overwrite on;
+
+    # Keep only specific parameters
+    sorted_args_filter keep id name version;
+
+    # Clear empty args
+    sorted_args_clear_empty_args on;
+
+    # Now $args contains the sorted and filtered result
+    proxy_pass http://backend;
+
+    # Input:  version=1&id=123&name=&token=abc&extra=xyz
+    # $args:  id=123&version=1
+    # (sorted, filtered to keep only id/name/version, empty name= removed)
+}
+```
+
+**Important:** If `sorted_args_overwrite` is enabled, the original query string is modified early in the request processing, affecting all subsequent phases.
 
 
 <a id="installation"></a>Installation Instructions
