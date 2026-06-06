@@ -7,7 +7,7 @@ Requests like `/index.html?b=2&a=1&c=3`, `/index.html?b=2&c=3&a=1`, `/index.html
 
 This is especially useful if you want to normalize the args to be used in a cache key, for example when used with the `proxy_cache_key` directive.
 
-It is also possible to remove one or more undesired query parameters by defining their name with the `sorted_args_filter` directive, like `sorted_args_filter <parameter_name> [<parameter_name> <parameter_name> ...];`.
+It is also possible to remove or keep selected query parameters with the `sorted_args_remove_args` and `sorted_args_keep_args` directives.
 
 _This module is not distributed with the Nginx source. See [the installation instructions](#installation)._
 
@@ -52,7 +52,7 @@ http {
     access_log       logs/nginx-http_access.log main;
 
     location /filtered {
-      sorted_args_filter keep -i v _ time b;
+      sorted_args_keep_args -i v _ time b;
 
       proxy_set_header Host "static_files_server";
       proxy_pass http://localhost:8081;
@@ -85,46 +85,95 @@ Variables
 ---------
 
 * **$sorted_args** - args after filtering and sorting
-* **$sorted_is_args** - "?" if args after filtering and sorting is not null, or an empty string otherwise
-* **$sorted_has_args** - "&" if args after filtering and sorting is not null, or "?" otherwise
+* **$sorted_is_args** - "?" if args after filtering and sorting is not empty, or an empty string otherwise
+* **$sorted_has_args** - "&" if args after filtering and sorting is not empty, or "?" otherwise
 
 Directives
 ----------
 
-**sorted_args_filter**
+**sorted_args_remove_args**
 
-**Syntax:** *sorted_args_filter keep [-i] args ...;* | *sorted_args_filter clear [-i] args ...;*
+**Syntax:** `sorted_args_remove_args * | [-i] args ...;`
 
 **Default:** *-*
 
 **Context:** *http, server, location, if in location*
 
-list parameters to be filtered while using the `$sorted_args` variable.
+List parameters to remove while using the `$sorted_args` variable. It cannot be configured in the same context as `sorted_args_keep_args`.
 
-The directive supports two modes:
-- **keep**: Only keep the specified parameters, remove all others
-- **clear**: Remove the specified parameters, keep all others
+Use `sorted_args_remove_args *;` to clear all arguments. This also replaces any remove or keep list inherited from an upper context.
 
 Optional **-i** parameter enables case-insensitive parameter matching.
+
+Argument names support exact matches, prefix wildcards, and suffix wildcards:
+- `token` matches only `token`
+- `utm_*` matches names starting with `utm_`
+- `*_sig` matches names ending with `_sig`
+- `''` (empty string) matches parameters with an empty key (value with no name)
+
+A single `*` has the special meaning above, so use a non-empty prefix or suffix when wildcard-filtering a remove list.
+
+Examples:
+```nginx
+# Remove 'token' and 'session' parameters
+sorted_args_remove_args token session;
+
+# Remove all parameters with an empty key
+sorted_args_remove_args '';
+
+# Remove parameters with either wildcard shape
+sorted_args_remove_args utm_* *_sig;
+
+# Remove parameters case-insensitively
+sorted_args_remove_args -i token session;
+
+# Clear all args
+sorted_args_remove_args *;
+```
+
+**sorted_args_keep_args**
+
+**Syntax:** `sorted_args_keep_args * | [-i] args ...;`
+
+**Default:** *-*
+
+**Context:** *http, server, location, if in location*
+
+List parameters to keep while using the `$sorted_args` variable. All other parameters are removed. It cannot be configured in the same context as `sorted_args_remove_args`.
+
+Use `sorted_args_keep_args *;` to disable a remove or keep list inherited from an upper context.
+
+Optional **-i** parameter enables case-insensitive parameter matching.
+
+Prefix and suffix wildcards are supported. A single `*` has the special meaning above, so use a non-empty prefix or suffix when wildcard-filtering a keep list.
+
+The argument list supports the same matching rules as `sorted_args_remove_args`:
+- `token` matches only `token`
+- `utm_*` matches names starting with `utm_`
+- `*_sig` matches names ending with `_sig`
+- `''` (empty string) matches parameters with an empty key
 
 Examples:
 ```nginx
 # Keep only 'id' and 'name' parameters (case-sensitive)
-sorted_args_filter keep id name;
+sorted_args_keep_args id name;
 
 # Keep only 'id' and 'name' parameters (case-insensitive)
-sorted_args_filter keep -i id name;
+sorted_args_keep_args -i id name;
 
-# Remove 'token' and 'session' parameters, keep all others
-sorted_args_filter clear token session;
+# Keep only parameters with an empty key
+sorted_args_keep_args '';
 
-# Remove 'token' and 'session' parameters (case-insensitive)
-sorted_args_filter clear -i token session;
+# Keep only parameters beginning with 'public_'
+sorted_args_keep_args public_*;
+
+# Disable inherited filtering
+sorted_args_keep_args *;
 ```
 
-**sorted_args_clear_empty_args**
+**sorted_args_clear_valueless_args**
 
-**Syntax:** *sorted_args_clear_empty_args on | off;*
+**Syntax:** *sorted_args_clear_valueless_args on | off;*
 
 **Default:** *off*
 
@@ -134,12 +183,66 @@ If enabled, removes parameters that have no value (e.g., `key` or `key=`).
 
 Examples:
 ```nginx
-# Enable clearing empty args
-sorted_args_clear_empty_args on;
+# Enable clearing valueless args
+sorted_args_clear_valueless_args on;
 
 # Input:  a=1&b=&c&d=2
 # Output: a=1&d=2
 # (b= and c are removed)
+```
+
+**sorted_args_clear_invalid_args**
+
+**Syntax:** *sorted_args_clear_invalid_args on | off;*
+
+**Default:** *off*
+
+**Context:** *http, server, location, if in location*
+
+If enabled, removes invalid parameters whose key is empty. This includes empty segments from consecutive ampersands (`&&`), a bare equals sign (`=`), and values with no key (`=value`).
+
+Examples:
+```nginx
+sorted_args_clear_invalid_args on;
+
+# Input:  a=1&&=&&=ac&b=2&c=&d
+# Output: a=1&b=2&c=&d
+```
+
+**sorted_args_order**
+
+**Syntax:** *sorted_args_order asc | desc;*
+
+**Default:** *asc*
+
+**Context:** *http, server, location, if in location*
+
+Controls the output sort order for `$sorted_args`.
+
+Examples:
+```nginx
+sorted_args_order desc;
+
+# Input:  a=1&c=3&b=2
+# Output: c=3&b=2&a=1
+```
+
+**sorted_args_dedupe**
+
+**Syntax:** *sorted_args_dedupe first | last | off;*
+
+**Default:** *off*
+
+**Context:** *http, server, location, if in location*
+
+Controls whether duplicate argument names are removed. `first` keeps the first occurrence in the original query string, `last` keeps the last occurrence, and `off` preserves all occurrences.
+
+Examples:
+```nginx
+sorted_args_dedupe first;
+
+# Input:  b=2&a=1&a=3&c=4
+# Output: a=1&b=2&c=4
 ```
 
 **sorted_args_overwrite**
@@ -159,10 +262,10 @@ location /api {
     sorted_args_overwrite on;
 
     # Keep only specific parameters
-    sorted_args_filter keep id name version;
+    sorted_args_keep_args id name version;
 
-    # Clear empty args
-    sorted_args_clear_empty_args on;
+    # Clear valueless args
+    sorted_args_clear_valueless_args on;
 
     # Now $args contains the sorted and filtered result
     proxy_pass http://backend;
