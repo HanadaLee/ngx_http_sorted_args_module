@@ -60,7 +60,7 @@ typedef struct {
     ngx_str_t                 key;
     ngx_str_t                 complete;
     ngx_uint_t                index;
-} ngx_http_sorted_args_parameter_t;
+} ngx_http_sorted_args_arg_t;
 
 
 static ngx_int_t ngx_http_sorted_args_add_variables(ngx_conf_t *cf);
@@ -80,15 +80,15 @@ static ngx_int_t ngx_http_sorted_args_str_eq(ngx_str_t *one, ngx_str_t *two,
     ngx_flag_t case_insensitive);
 static ngx_int_t ngx_http_sorted_args_str_cmp(ngx_str_t *one, ngx_str_t *two);
 static ngx_int_t ngx_http_sorted_args_match_filter(
-    ngx_http_sorted_args_loc_conf_t *salc, ngx_http_sorted_args_filter_t *filter,
-    ngx_str_t *key);
-static ngx_int_t ngx_http_sorted_args_should_output_parameter(
-    ngx_http_sorted_args_loc_conf_t *salc, ngx_http_sorted_args_parameter_t *param);
+    ngx_http_sorted_args_loc_conf_t *slcf,
+    ngx_http_sorted_args_filter_t *filter, ngx_str_t *key);
+static ngx_int_t ngx_http_sorted_args_should_output_arg(
+    ngx_http_sorted_args_loc_conf_t *slcf, ngx_http_sorted_args_arg_t *arg);
 static ngx_int_t ngx_http_sorted_args_same_key(
-    ngx_http_sorted_args_parameter_t *one, ngx_http_sorted_args_parameter_t *two);
-static ngx_int_t ngx_http_sorted_args_dedupe_parameter(
-    ngx_http_sorted_args_loc_conf_t *salc, ngx_http_sorted_args_ctx_t *ctx,
-    ngx_http_sorted_args_parameter_t *param);
+    ngx_http_sorted_args_arg_t *one, ngx_http_sorted_args_arg_t *two);
+static ngx_int_t ngx_http_sorted_args_dedupe_arg(
+    ngx_http_sorted_args_loc_conf_t *slcf, ngx_http_sorted_args_ctx_t *ctx,
+    ngx_http_sorted_args_arg_t *arg);
 
 static ngx_int_t ngx_http_sorted_args_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_sorted_args_variable(ngx_http_request_t *r,
@@ -295,7 +295,7 @@ ngx_http_sorted_args_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
 static char *
 ngx_http_sorted_args_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
-    ngx_http_sorted_args_loc_conf_t  *salc = conf;
+    ngx_http_sorted_args_loc_conf_t  *slcf = conf;
 
     ngx_http_sorted_args_filter_t     parsed, *filter;
     ngx_str_t                         *value;
@@ -315,8 +315,8 @@ ngx_http_sorted_args_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     n = 1;
 
-    if (salc->mode != NGX_CONF_UNSET_UINT) {
-        if (salc->mode != mode) {
+    if (slcf->mode != NGX_CONF_UNSET_UINT) {
+        if (slcf->mode != mode) {
             return "conflicts with sorted_args_keep_args or "
                    "sorted_args_remove_args";
         }
@@ -324,14 +324,14 @@ ngx_http_sorted_args_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return "is duplicate";
     }
 
-    salc->mode = mode;
-    salc->case_insensitive = 0;
+    slcf->mode = mode;
+    slcf->case_insensitive = 0;
 
     if (value[n].len == 2
         && value[n].data[0] == '-'
         && value[n].data[1] == 'i')
     {
-        salc->case_insensitive = 1;
+        slcf->case_insensitive = 1;
         n++;
     }
 
@@ -344,24 +344,24 @@ ngx_http_sorted_args_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         if (mode == NGX_HTTP_SORTED_ARGS_MODE_REMOVE && value[n].len == 1
             && value[n].data[0] == '*')
         {
-            salc->mode = NGX_HTTP_SORTED_ARGS_MODE_CLEAR;
-            salc->args_to_filter = NULL;
+            slcf->mode = NGX_HTTP_SORTED_ARGS_MODE_CLEAR;
+            slcf->args_to_filter = NULL;
             return NGX_CONF_OK;
         }
 
         if (mode == NGX_HTTP_SORTED_ARGS_MODE_KEEP && value[n].len == 1
             && value[n].data[0] == '*')
         {
-            salc->mode = NGX_HTTP_SORTED_ARGS_MODE_OFF;
-            salc->args_to_filter = NULL;
+            slcf->mode = NGX_HTTP_SORTED_ARGS_MODE_OFF;
+            slcf->args_to_filter = NULL;
             return NGX_CONF_OK;
         }
     }
 
-    salc->args_to_filter = ngx_array_create(cf->pool,
+    slcf->args_to_filter = ngx_array_create(cf->pool,
                                         cf->args->nelts - n,
                                         sizeof(ngx_http_sorted_args_filter_t));
-    if (salc->args_to_filter == NULL) {
+    if (slcf->args_to_filter == NULL) {
         return NGX_CONF_ERROR;
     }
 
@@ -403,16 +403,16 @@ ngx_http_sorted_args_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         }
 
         exists = 0;
-        filter = salc->args_to_filter->elts;
+        filter = slcf->args_to_filter->elts;
 
-        for (j = 0; j < salc->args_to_filter->nelts; j++) {
+        for (j = 0; j < slcf->args_to_filter->nelts; j++) {
 
             if (parsed.wildcard != filter[j].wildcard) {
                 continue;
             }
 
             if (ngx_http_sorted_args_str_eq(&parsed.name, &filter[j].name,
-                                            salc->case_insensitive) == NGX_OK)
+                                            slcf->case_insensitive) == NGX_OK)
             {
                 exists = 1;
                 break;
@@ -420,7 +420,7 @@ ngx_http_sorted_args_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         }
 
         if (!exists) {
-            filter = ngx_array_push(salc->args_to_filter);
+            filter = ngx_array_push(slcf->args_to_filter);
             if (filter == NULL) {
                 return NGX_CONF_ERROR;
             }
@@ -478,7 +478,7 @@ ngx_http_sorted_args_str_cmp(ngx_str_t *one, ngx_str_t *two)
 
 
 static ngx_int_t
-ngx_http_sorted_args_match_filter(ngx_http_sorted_args_loc_conf_t *salc,
+ngx_http_sorted_args_match_filter(ngx_http_sorted_args_loc_conf_t *slcf,
     ngx_http_sorted_args_filter_t *filter, ngx_str_t *key)
 {
     ngx_str_t  part;
@@ -494,59 +494,59 @@ ngx_http_sorted_args_match_filter(ngx_http_sorted_args_loc_conf_t *salc,
         part.len = filter->name.len;
 
         return ngx_http_sorted_args_str_eq(&part, &filter->name,
-                                           salc->case_insensitive);
+                                           slcf->case_insensitive);
 
     case NGX_HTTP_SORTED_ARGS_FILTER_SUFFIX:
         part.data = key->data + key->len - filter->name.len;
         part.len = filter->name.len;
 
         return ngx_http_sorted_args_str_eq(&part, &filter->name,
-                                           salc->case_insensitive);
+                                           slcf->case_insensitive);
 
     default:
         return ngx_http_sorted_args_str_eq(key, &filter->name,
-                                           salc->case_insensitive);
+                                           slcf->case_insensitive);
     }
 }
 
 
 static ngx_int_t
-ngx_http_sorted_args_should_output_parameter(ngx_http_sorted_args_loc_conf_t *salc,
-    ngx_http_sorted_args_parameter_t *param)
+ngx_http_sorted_args_should_output_arg(ngx_http_sorted_args_loc_conf_t *slcf,
+    ngx_http_sorted_args_arg_t *arg)
 {
     ngx_http_sorted_args_filter_t  *filter;
     ngx_int_t                       matched;
     ngx_uint_t                      i;
 
-    if (salc->clear_invalid_args && param->key.len == 0) {
+    if (slcf->clear_invalid_args && arg->key.len == 0) {
         return NGX_DECLINED;
     }
 
-    if (salc->clear_valueless_args
-        && (param->key.len == param->complete.len
-            || (param->key.len + 1 == param->complete.len
-                && param->complete.data[param->key.len] == '=')))
+    if (slcf->clear_valueless_args
+        && (arg->key.len == arg->complete.len
+            || (arg->key.len + 1 == arg->complete.len
+                && arg->complete.data[arg->key.len] == '=')))
     {
         return NGX_DECLINED;
     }
 
     matched = NGX_DECLINED;
 
-    if (salc->mode == NGX_HTTP_SORTED_ARGS_MODE_OFF) {
+    if (slcf->mode == NGX_HTTP_SORTED_ARGS_MODE_OFF) {
         return NGX_OK;
     }
 
-    if (salc->mode == NGX_CONF_UNSET_UINT
-        || salc->args_to_filter == NGX_CONF_UNSET_PTR
-        || salc->args_to_filter == NULL)
+    if (slcf->mode == NGX_CONF_UNSET_UINT
+        || slcf->args_to_filter == NGX_CONF_UNSET_PTR
+        || slcf->args_to_filter == NULL)
     {
         goto check_filter;
     }
 
-    filter = salc->args_to_filter->elts;
+    filter = slcf->args_to_filter->elts;
 
-    for (i = 0; i < salc->args_to_filter->nelts; i++) {
-        if (ngx_http_sorted_args_match_filter(salc, &filter[i], &param->key)
+    for (i = 0; i < slcf->args_to_filter->nelts; i++) {
+        if (ngx_http_sorted_args_match_filter(slcf, &filter[i], &arg->key)
             == NGX_OK)
         {
             matched = NGX_OK;
@@ -556,7 +556,7 @@ ngx_http_sorted_args_should_output_parameter(ngx_http_sorted_args_loc_conf_t *sa
 
 check_filter:
 
-    if (salc->mode == NGX_HTTP_SORTED_ARGS_MODE_KEEP) {
+    if (slcf->mode == NGX_HTTP_SORTED_ARGS_MODE_KEEP) {
         return matched;
     }
 
@@ -565,8 +565,8 @@ check_filter:
 
 
 static ngx_int_t
-ngx_http_sorted_args_same_key(ngx_http_sorted_args_parameter_t *one,
-    ngx_http_sorted_args_parameter_t *two)
+ngx_http_sorted_args_same_key(ngx_http_sorted_args_arg_t *one,
+    ngx_http_sorted_args_arg_t *two)
 {
     if (one->key.len != two->key.len) {
         return NGX_DECLINED;
@@ -582,13 +582,13 @@ ngx_http_sorted_args_same_key(ngx_http_sorted_args_parameter_t *one,
 
 
 static ngx_int_t
-ngx_http_sorted_args_dedupe_parameter(ngx_http_sorted_args_loc_conf_t *salc,
-    ngx_http_sorted_args_ctx_t *ctx, ngx_http_sorted_args_parameter_t *param)
+ngx_http_sorted_args_dedupe_arg(ngx_http_sorted_args_loc_conf_t *slcf,
+    ngx_http_sorted_args_ctx_t *ctx, ngx_http_sorted_args_arg_t *arg)
 {
-    ngx_http_sorted_args_parameter_t  *other;
-    ngx_queue_t                      *q;
+    ngx_http_sorted_args_arg_t  *other;
+    ngx_queue_t                 *q;
 
-    if (salc->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_OFF) {
+    if (slcf->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_OFF) {
         return NGX_OK;
     }
 
@@ -596,24 +596,24 @@ ngx_http_sorted_args_dedupe_parameter(ngx_http_sorted_args_loc_conf_t *salc,
          q != ngx_queue_sentinel(&ctx->args_queue);
          q = ngx_queue_next(q))
     {
-        other = ngx_queue_data(q, ngx_http_sorted_args_parameter_t, queue);
+        other = ngx_queue_data(q, ngx_http_sorted_args_arg_t, queue);
 
-        if (other == param
-            || ngx_http_sorted_args_same_key(param, other) != NGX_OK
-            || ngx_http_sorted_args_should_output_parameter(salc, other)
+        if (other == arg
+            || ngx_http_sorted_args_same_key(arg, other) != NGX_OK
+            || ngx_http_sorted_args_should_output_arg(slcf, other)
                != NGX_OK)
         {
             continue;
         }
 
-        if (salc->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_FIRST
-            && other->index < param->index)
+        if (slcf->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_FIRST
+            && other->index < arg->index)
         {
             return NGX_DECLINED;
         }
 
-        if (salc->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_LAST
-            && other->index > param->index)
+        if (slcf->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_LAST
+            && other->index > arg->index)
         {
             return NGX_DECLINED;
         }
@@ -627,11 +627,11 @@ static ngx_int_t
 ngx_http_sorted_args_cmp_args(const ngx_queue_t *one,
     const ngx_queue_t *two)
 {
-    ngx_http_sorted_args_parameter_t   *first, *second;
-    ngx_int_t                           rc;
+    ngx_http_sorted_args_arg_t   *first, *second;
+    ngx_int_t                     rc;
 
-    first  = ngx_queue_data(one, ngx_http_sorted_args_parameter_t, queue);
-    second = ngx_queue_data(two, ngx_http_sorted_args_parameter_t, queue);
+    first  = ngx_queue_data(one, ngx_http_sorted_args_arg_t, queue);
+    second = ngx_queue_data(two, ngx_http_sorted_args_arg_t, queue);
 
     rc = ngx_http_sorted_args_str_cmp(&first->key, &second->key);
     if (rc == 0) {
@@ -645,18 +645,18 @@ ngx_http_sorted_args_cmp_args(const ngx_queue_t *one,
 static ngx_int_t
 ngx_http_sorted_args_process(ngx_http_request_t *r, ngx_str_t *result)
 {
-    ngx_http_sorted_args_loc_conf_t      *salc;
-    ngx_http_sorted_args_ctx_t           *ctx;
-    ngx_http_sorted_args_parameter_t     *param;
-    u_char                               *ampersand, *equal, *last;
-    ngx_queue_t                          *q;
-    ngx_uint_t                            index;
-    u_char                               *p, *args;
-    size_t                                args_len;
+    ngx_http_sorted_args_loc_conf_t  *slcf;
+    ngx_http_sorted_args_ctx_t       *ctx;
+    ngx_http_sorted_args_arg_t       *arg;
+    u_char                           *ampersand, *equal, *last;
+    ngx_queue_t                      *q;
+    ngx_uint_t                        index;
+    u_char                           *p, *args;
+    size_t                            args_len;
 
-    salc = ngx_http_get_module_loc_conf(r, ngx_http_sorted_args_module);
+    slcf = ngx_http_get_module_loc_conf(r, ngx_http_sorted_args_module);
 
-    if (salc->mode == NGX_HTTP_SORTED_ARGS_MODE_CLEAR) {
+    if (slcf->mode == NGX_HTTP_SORTED_ARGS_MODE_CLEAR) {
         result->len = 0;
         result->data = (u_char *) "";
         return NGX_OK;
@@ -679,9 +679,8 @@ ngx_http_sorted_args_process(ngx_http_request_t *r, ngx_str_t *result)
         index = 0;
 
         for ( /* void */ ; p < last; p++) {
-            param = ngx_pcalloc(r->pool,
-                sizeof(ngx_http_sorted_args_parameter_t));
-            if (param == NULL) {
+            arg = ngx_pcalloc(r->pool, sizeof(ngx_http_sorted_args_arg_t));
+            if (arg == NULL) {
                 return NGX_ERROR;
             }
 
@@ -695,14 +694,14 @@ ngx_http_sorted_args_process(ngx_http_request_t *r, ngx_str_t *result)
                 equal = ampersand;
             }
 
-            param->key.data = p;
-            param->key.len = equal - p;
+            arg->key.data = p;
+            arg->key.len = equal - p;
 
-            param->complete.data = p;
-            param->complete.len = ampersand - p;
-            param->index = index++;
+            arg->complete.data = p;
+            arg->complete.len = ampersand - p;
+            arg->index = index++;
 
-            ngx_queue_insert_tail(&ctx->args_queue, &param->queue);
+            ngx_queue_insert_tail(&ctx->args_queue, &arg->queue);
 
             p = ampersand;
         }
@@ -716,29 +715,29 @@ ngx_http_sorted_args_process(ngx_http_request_t *r, ngx_str_t *result)
     }
 
     p = args;
-    for (q = (salc->order == NGX_HTTP_SORTED_ARGS_ORDER_DESC)
+    for (q = (slcf->order == NGX_HTTP_SORTED_ARGS_ORDER_DESC)
              ? ngx_queue_last(&ctx->args_queue)
              : ngx_queue_head(&ctx->args_queue);
          q != ngx_queue_sentinel(&ctx->args_queue);
-         q = (salc->order == NGX_HTTP_SORTED_ARGS_ORDER_DESC)
+         q = (slcf->order == NGX_HTTP_SORTED_ARGS_ORDER_DESC)
              ? ngx_queue_prev(q)
              : ngx_queue_next(q))
     {
-        param = ngx_queue_data(q, ngx_http_sorted_args_parameter_t, queue);
+        arg = ngx_queue_data(q, ngx_http_sorted_args_arg_t, queue);
 
-        if (ngx_http_sorted_args_should_output_parameter(salc, param)
+        if (ngx_http_sorted_args_should_output_arg(slcf, arg)
             != NGX_OK)
         {
             continue;
         }
 
-        if (ngx_http_sorted_args_dedupe_parameter(salc, ctx, param)
+        if (ngx_http_sorted_args_dedupe_arg(slcf, ctx, arg)
             != NGX_OK)
         {
             continue;
         }
 
-        p = ngx_sprintf(p, "%V&", &param->complete);
+        p = ngx_sprintf(p, "%V&", &arg->complete);
     }
 
     args_len = (p > args) ? p - args - 1 : 0;
@@ -820,13 +819,13 @@ ngx_http_sorted_args_variable(ngx_http_request_t *r,
 static ngx_int_t
 ngx_http_sorted_args_handler(ngx_http_request_t *r)
 {
-    ngx_http_sorted_args_loc_conf_t      *salc;
+    ngx_http_sorted_args_loc_conf_t      *slcf;
     ngx_str_t                             result;
     ngx_int_t                             rc;
 
-    salc = ngx_http_get_module_loc_conf(r, ngx_http_sorted_args_module);
+    slcf = ngx_http_get_module_loc_conf(r, ngx_http_sorted_args_module);
 
-    if (!salc->overwrite || r->args.len == 0) {
+    if (!slcf->overwrite || r->args.len == 0) {
         return NGX_DECLINED;
     }
 
