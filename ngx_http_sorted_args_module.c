@@ -78,6 +78,7 @@ static ngx_int_t ngx_http_sorted_args_process(ngx_http_request_t *r,
     ngx_str_t *result);
 static ngx_int_t ngx_http_sorted_args_str_eq(ngx_str_t *one, ngx_str_t *two,
     ngx_flag_t case_insensitive);
+static ngx_int_t ngx_http_sorted_args_str_cmp(ngx_str_t *one, ngx_str_t *two);
 static ngx_int_t ngx_http_sorted_args_match_filter(
     ngx_http_sorted_args_loc_conf_t *salc, ngx_http_sorted_args_filter_t *filter,
     ngx_str_t *key);
@@ -455,6 +456,28 @@ ngx_http_sorted_args_str_eq(ngx_str_t *one, ngx_str_t *two,
 
 
 static ngx_int_t
+ngx_http_sorted_args_str_cmp(ngx_str_t *one, ngx_str_t *two)
+{
+    ngx_int_t  rc;
+
+    rc = ngx_strncmp(one->data, two->data, ngx_min(one->len, two->len));
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (one->len < two->len) {
+        return -1;
+    }
+
+    if (one->len > two->len) {
+        return 1;
+    }
+
+    return 0;
+}
+
+
+static ngx_int_t
 ngx_http_sorted_args_match_filter(ngx_http_sorted_args_loc_conf_t *salc,
     ngx_http_sorted_args_filter_t *filter, ngx_str_t *key)
 {
@@ -610,15 +633,9 @@ ngx_http_sorted_args_cmp_args(const ngx_queue_t *one,
     first  = ngx_queue_data(one, ngx_http_sorted_args_parameter_t, queue);
     second = ngx_queue_data(two, ngx_http_sorted_args_parameter_t, queue);
 
-    rc = ngx_strncasecmp(first->key.data, second->key.data,
-                            ngx_min(first->key.len, second->key.len));
+    rc = ngx_http_sorted_args_str_cmp(&first->key, &second->key);
     if (rc == 0) {
-        rc = ngx_strncasecmp(first->complete.data, second->complete.data,
-                                ngx_min(first->complete.len,
-                                    second->complete.len));
-        if (rc == 0) {
-            rc = -1;
-        }
+        rc = ngx_http_sorted_args_str_cmp(&first->complete, &second->complete);
     }
 
     return rc;

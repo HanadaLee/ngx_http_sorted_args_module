@@ -27,6 +27,45 @@ describe "check sorted args module" do
     end
   end
 
+  it "should sort prefixed values by full parameter" do
+    nginx_run_server do
+      EventMachine.run do
+        req = EventMachine::HttpRequest.new("#{nginx_address}/?key=value1&key=value").get
+        req.callback do
+          expect(req).to be_http_status(200)
+          expect(req.response).to be === '{"args": "key=value1&key=value", "sorted_args": "key=value&key=value1"}'
+          EventMachine.stop
+        end
+      end
+    end
+  end
+
+  it "should sort prefixed names by full key before comparing values" do
+    nginx_run_server do
+      EventMachine.run do
+        req = EventMachine::HttpRequest.new("#{nginx_address}/?key1=value1&key=value").get
+        req.callback do
+          expect(req).to be_http_status(200)
+          expect(req.response).to be === '{"args": "key1=value1&key=value", "sorted_args": "key=value&key1=value1"}'
+          EventMachine.stop
+        end
+      end
+    end
+  end
+
+  it "should sort parameter names case-sensitively" do
+    nginx_run_server do
+      EventMachine.run do
+        req = EventMachine::HttpRequest.new("#{nginx_address}/?a=1&A=1").get
+        req.callback do
+          expect(req).to be_http_status(200)
+          expect(req.response).to be === '{"args": "a=1&A=1", "sorted_args": "A=1&a=1"}'
+          EventMachine.stop
+        end
+      end
+    end
+  end
+
   it "should remove specified parameters" do
     nginx_run_server({remove_args: ["c", "_"]}) do
       EventMachine.run do

@@ -5,6 +5,8 @@ This Nginx module orders the args parameters of an HTTP request alphanumerically
 
 Requests like `/index.html?b=2&a=1&c=3`, `/index.html?b=2&c=3&a=1`, `/index.html?c=3&a=1&b=2`, `/index.html?c=3&b=2&a=1` will produce the same normalized args `a=1&b=2&c=3` which can be accessed within Nginx using the `$sorted_args` variable.
 
+Sorting is bytewise and case-sensitive; the `-i` option only affects parameter filtering directives.
+
 This is especially useful if you want to normalize the args to be used in a cache key, for example when used with the `proxy_cache_key` directive.
 
 It is also possible to remove or keep selected query parameters with the `sorted_args_remove_args` and `sorted_args_keep_args` directives.
