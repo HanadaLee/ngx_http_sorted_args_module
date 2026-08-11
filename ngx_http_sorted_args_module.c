@@ -10,6 +10,10 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#if (NGX_CONDITION)
+#include <ngx_http_condition_module.h>
+#endif
+
 
 #define NGX_HTTP_SORTED_ARGS_VARIABLE_ARGS        0
 #define NGX_HTTP_SORTED_ARGS_VARIABLE_IS_ARGS     1
@@ -33,21 +37,44 @@
 
 
 typedef struct {
-    ngx_array_t              *args_to_filter;
+    ngx_str_t                 name;
+    ngx_uint_t                wildcard;
+} ngx_http_sorted_args_filter_t;
+
+
+typedef struct {
+    ngx_array_t              *args;
     ngx_uint_t                mode;
+    ngx_flag_t                case_insensitive;
+} ngx_http_sorted_args_filter_conf_t;
+
+
+typedef struct {
+#if (NGX_CONDITION)
+    ngx_array_t              *filter;
+    ngx_array_t              *order;
+    ngx_array_t              *dedupe;
+    ngx_array_t              *clear_valueless_args;
+    ngx_array_t              *clear_invalid_args;
+    ngx_array_t              *overwrite;
+#else
+    ngx_http_sorted_args_filter_conf_t  *filter;
     ngx_uint_t                order;
     ngx_uint_t                dedupe;
-    ngx_flag_t                case_insensitive;
     ngx_flag_t                clear_valueless_args;
     ngx_flag_t                clear_invalid_args;
     ngx_flag_t                overwrite;
+#endif
 } ngx_http_sorted_args_loc_conf_t;
 
 
 typedef struct {
-    ngx_str_t                 name;
-    ngx_uint_t                wildcard;
-} ngx_http_sorted_args_filter_t;
+    ngx_http_sorted_args_filter_conf_t  *filter;
+    ngx_uint_t                           order;
+    ngx_uint_t                           dedupe;
+    ngx_flag_t                           clear_valueless_args;
+    ngx_flag_t                           clear_invalid_args;
+} ngx_http_sorted_args_runtime_conf_t;
 
 
 typedef struct {
@@ -80,14 +107,16 @@ static ngx_int_t ngx_http_sorted_args_str_eq(ngx_str_t *one, ngx_str_t *two,
     ngx_flag_t case_insensitive);
 static ngx_int_t ngx_http_sorted_args_str_cmp(ngx_str_t *one, ngx_str_t *two);
 static ngx_int_t ngx_http_sorted_args_match_filter(
-    ngx_http_sorted_args_loc_conf_t *slcf,
+    ngx_http_sorted_args_filter_conf_t *filter_conf,
     ngx_http_sorted_args_filter_t *filter, ngx_str_t *key);
 static ngx_int_t ngx_http_sorted_args_should_output_arg(
-    ngx_http_sorted_args_loc_conf_t *slcf, ngx_http_sorted_args_arg_t *arg);
+    ngx_http_sorted_args_runtime_conf_t *rcf,
+    ngx_http_sorted_args_arg_t *arg);
 static ngx_int_t ngx_http_sorted_args_same_key(
     ngx_http_sorted_args_arg_t *one, ngx_http_sorted_args_arg_t *two);
 static ngx_int_t ngx_http_sorted_args_dedupe_arg(
-    ngx_http_sorted_args_loc_conf_t *slcf, ngx_http_sorted_args_ctx_t *ctx,
+    ngx_http_sorted_args_runtime_conf_t *rcf,
+    ngx_http_sorted_args_ctx_t *ctx,
     ngx_http_sorted_args_arg_t *arg);
 
 static ngx_int_t ngx_http_sorted_args_handler(ngx_http_request_t *r);
@@ -112,58 +141,94 @@ static ngx_conf_enum_t  ngx_http_sorted_args_dedupe[] = {
 
 static ngx_command_t  ngx_http_sorted_args_commands[] = {
 
-    { ngx_string("sorted_args_remove_args"),
+    { ngx_string("sorted_args_filter"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF
+#if (NGX_CONDITION)
+                        |NGX_HTTP_MAIN_WHEN_CONF|NGX_HTTP_SRV_WHEN_CONF
+                        |NGX_HTTP_LOC_WHEN_CONF
+#endif
                         |NGX_CONF_1MORE,
       ngx_http_sorted_args_filter,
       NGX_HTTP_LOC_CONF_OFFSET,
-      offsetof(ngx_http_sorted_args_loc_conf_t, args_to_filter),
-      NULL },
-
-    { ngx_string("sorted_args_keep_args"),
-      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF
-                        |NGX_CONF_1MORE,
-      ngx_http_sorted_args_filter,
-      NGX_HTTP_LOC_CONF_OFFSET,
-      offsetof(ngx_http_sorted_args_loc_conf_t, args_to_filter),
+      offsetof(ngx_http_sorted_args_loc_conf_t, filter),
       NULL },
 
     { ngx_string("sorted_args_clear_valueless_args"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF
+#if (NGX_CONDITION)
+                        |NGX_HTTP_MAIN_WHEN_CONF|NGX_HTTP_SRV_WHEN_CONF
+                        |NGX_HTTP_LOC_WHEN_CONF
+#endif
                         |NGX_CONF_FLAG,
+#if (NGX_CONDITION)
+      ngx_conf_set_conditional_flag_slot,
+#else
       ngx_conf_set_flag_slot,
+#endif
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_sorted_args_loc_conf_t, clear_valueless_args),
       NULL },
 
     { ngx_string("sorted_args_clear_invalid_args"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF
+#if (NGX_CONDITION)
+                        |NGX_HTTP_MAIN_WHEN_CONF|NGX_HTTP_SRV_WHEN_CONF
+                        |NGX_HTTP_LOC_WHEN_CONF
+#endif
                         |NGX_CONF_FLAG,
+#if (NGX_CONDITION)
+      ngx_conf_set_conditional_flag_slot,
+#else
       ngx_conf_set_flag_slot,
+#endif
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_sorted_args_loc_conf_t, clear_invalid_args),
       NULL },
 
     { ngx_string("sorted_args_order"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF
+#if (NGX_CONDITION)
+                        |NGX_HTTP_MAIN_WHEN_CONF|NGX_HTTP_SRV_WHEN_CONF
+                        |NGX_HTTP_LOC_WHEN_CONF
+#endif
                         |NGX_CONF_TAKE1,
+#if (NGX_CONDITION)
+      ngx_conf_set_conditional_enum_slot,
+#else
       ngx_conf_set_enum_slot,
+#endif
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_sorted_args_loc_conf_t, order),
       &ngx_http_sorted_args_order },
 
     { ngx_string("sorted_args_dedupe"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF
+#if (NGX_CONDITION)
+                        |NGX_HTTP_MAIN_WHEN_CONF|NGX_HTTP_SRV_WHEN_CONF
+                        |NGX_HTTP_LOC_WHEN_CONF
+#endif
                         |NGX_CONF_TAKE1,
+#if (NGX_CONDITION)
+      ngx_conf_set_conditional_enum_slot,
+#else
       ngx_conf_set_enum_slot,
+#endif
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_sorted_args_loc_conf_t, dedupe),
       &ngx_http_sorted_args_dedupe },
 
     { ngx_string("sorted_args_overwrite"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF
+#if (NGX_CONDITION)
+                        |NGX_HTTP_MAIN_WHEN_CONF|NGX_HTTP_SRV_WHEN_CONF
+                        |NGX_HTTP_LOC_WHEN_CONF
+#endif
                         |NGX_CONF_FLAG,
+#if (NGX_CONDITION)
+      ngx_conf_set_conditional_flag_slot,
+#else
       ngx_conf_set_flag_slot,
+#endif
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_sorted_args_loc_conf_t, overwrite),
       NULL },
@@ -176,14 +241,14 @@ static ngx_http_module_t  ngx_http_sorted_args_module_ctx = {
     ngx_http_sorted_args_add_variables,             /* preconfiguration */
     ngx_http_sorted_args_init,                      /* postconfiguration */
 
-    NULL,                                           /* create main configuration */
-    NULL,                                           /* init main configuration */
+    NULL,                                           /* create main conf */
+    NULL,                                           /* init main conf */
 
-    NULL,                                           /* create server configuration */
-    NULL,                                           /* merge server configuration */
+    NULL,                                           /* create server conf */
+    NULL,                                           /* merge server conf */
 
-    ngx_http_sorted_args_create_loc_conf,           /* create location configuration */
-    ngx_http_sorted_args_merge_loc_conf             /* merge location configuration */
+    ngx_http_sorted_args_create_loc_conf,           /* create location conf */
+    ngx_http_sorted_args_merge_loc_conf             /* merge location conf */
 };
 
 
@@ -253,14 +318,20 @@ ngx_http_sorted_args_create_loc_conf(ngx_conf_t *cf)
         return NULL;
     }
 
-    conf->args_to_filter = NGX_CONF_UNSET_PTR;
-    conf->mode = NGX_CONF_UNSET_UINT;
+    conf->filter = NGX_CONF_UNSET_PTR;
+#if (NGX_CONDITION)
+    conf->order = NGX_CONF_UNSET_PTR;
+    conf->dedupe = NGX_CONF_UNSET_PTR;
+    conf->clear_valueless_args = NGX_CONF_UNSET_PTR;
+    conf->clear_invalid_args = NGX_CONF_UNSET_PTR;
+    conf->overwrite = NGX_CONF_UNSET_PTR;
+#else
     conf->order = NGX_CONF_UNSET_UINT;
     conf->dedupe = NGX_CONF_UNSET_UINT;
-    conf->case_insensitive = NGX_CONF_UNSET;
     conf->clear_valueless_args = NGX_CONF_UNSET;
     conf->clear_invalid_args = NGX_CONF_UNSET;
     conf->overwrite = NGX_CONF_UNSET;
+#endif
 
     return conf;
 }
@@ -272,12 +343,51 @@ ngx_http_sorted_args_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_http_sorted_args_loc_conf_t  *prev = parent;
     ngx_http_sorted_args_loc_conf_t  *conf = child;
 
-    if (conf->mode == NGX_CONF_UNSET_UINT) {
-        conf->args_to_filter = prev->args_to_filter;
-        conf->mode = prev->mode;
-        conf->case_insensitive = prev->case_insensitive;
+#if (NGX_CONDITION)
+    if (ngx_conf_merge_conditional_ptr_value(cf, &conf->filter,
+                                             prev->filter, NULL)
+        != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
     }
 
+    if (ngx_conf_merge_conditional_enum_value(cf, &conf->order, prev->order,
+                                              NGX_HTTP_SORTED_ARGS_ORDER_ASC)
+        != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
+    }
+
+    if (ngx_conf_merge_conditional_enum_value(cf, &conf->dedupe, prev->dedupe,
+                                              NGX_HTTP_SORTED_ARGS_DEDUPE_OFF)
+        != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
+    }
+
+    if (ngx_conf_merge_conditional_flag_value(cf,
+                                              &conf->clear_valueless_args,
+                                              prev->clear_valueless_args, 0)
+        != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
+    }
+
+    if (ngx_conf_merge_conditional_flag_value(cf, &conf->clear_invalid_args,
+                                              prev->clear_invalid_args, 0)
+        != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
+    }
+
+    if (ngx_conf_merge_conditional_flag_value(cf, &conf->overwrite,
+                                              prev->overwrite, 0)
+        != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
+    }
+#else
+    ngx_conf_merge_ptr_value(conf->filter, prev->filter, NULL);
     ngx_conf_merge_uint_value(conf->order, prev->order,
                               NGX_HTTP_SORTED_ARGS_ORDER_ASC);
     ngx_conf_merge_uint_value(conf->dedupe, prev->dedupe,
@@ -287,6 +397,7 @@ ngx_http_sorted_args_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_value(conf->clear_invalid_args,
                          prev->clear_invalid_args, 0);
     ngx_conf_merge_value(conf->overwrite, prev->overwrite, 0);
+#endif
 
     return NGX_CONF_OK;
 }
@@ -297,41 +408,67 @@ ngx_http_sorted_args_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
     ngx_http_sorted_args_loc_conf_t  *slcf = conf;
 
-    ngx_http_sorted_args_filter_t     parsed, *filter;
-    ngx_str_t                         *value;
-    ngx_uint_t                         i, j, n, wildcards, mode;
-    ngx_flag_t                         exists;
-
-    mode = NGX_HTTP_SORTED_ARGS_MODE_REMOVE;
-
-    if (cmd->name.len == sizeof("sorted_args_keep_args") - 1
-        && ngx_strncmp(cmd->name.data, "sorted_args_keep_args",
-                       sizeof("sorted_args_keep_args") - 1) == 0)
-    {
-        mode = NGX_HTTP_SORTED_ARGS_MODE_KEEP;
-    }
+    ngx_http_sorted_args_filter_conf_t  *filter_conf;
+    ngx_http_sorted_args_filter_t        parsed, *filter;
+    ngx_str_t                           *value;
+    ngx_uint_t                           i, j, n, wildcards;
+    ngx_flag_t                           exists;
+#if (NGX_CONDITION)
+    ngx_condition_expr_id_t              expr_id;
+    ngx_conf_condition_ptr_ctx_t        *condition_ctx;
+#endif
 
     value = cf->args->elts;
 
-    n = 1;
+#if (NGX_CONDITION)
+    expr_id = ngx_condition_get_associated_expr_id(cf);
 
-    if (slcf->mode != NGX_CONF_UNSET_UINT) {
-        if (slcf->mode != mode) {
-            return "conflicts with sorted_args_keep_args or "
-                   "sorted_args_remove_args";
-        }
-
+    if (ngx_condition_find_expr_ctx(slcf->filter, expr_id,
+                                    sizeof(ngx_conf_condition_ptr_ctx_t),
+                                    offsetof(ngx_conf_condition_ptr_ctx_t,
+                                             expr_id))
+        != NULL)
+    {
         return "is duplicate";
     }
+#else
+    if (slcf->filter != NGX_CONF_UNSET_PTR) {
+        return "is duplicate";
+    }
+#endif
 
-    slcf->mode = mode;
-    slcf->case_insensitive = 0;
+    filter_conf = ngx_pcalloc(cf->pool,
+                              sizeof(ngx_http_sorted_args_filter_conf_t));
+    if (filter_conf == NULL) {
+        return NGX_CONF_ERROR;
+    }
 
-    if (value[n].len == 2
+    if (ngx_strcmp(value[1].data, "off") == 0) {
+        if (cf->args->nelts != 2) {
+            return "\"off\" must be specified without argument names";
+        }
+
+        filter_conf->mode = NGX_HTTP_SORTED_ARGS_MODE_OFF;
+        goto save;
+    }
+
+    if (ngx_strcmp(value[1].data, "keep") == 0) {
+        filter_conf->mode = NGX_HTTP_SORTED_ARGS_MODE_KEEP;
+
+    } else if (ngx_strcmp(value[1].data, "remove") == 0) {
+        filter_conf->mode = NGX_HTTP_SORTED_ARGS_MODE_REMOVE;
+
+    } else {
+        return "first parameter must be \"keep\", \"remove\", or \"off\"";
+    }
+
+    n = 2;
+
+    if (cf->args->nelts > n && value[n].len == 2
         && value[n].data[0] == '-'
         && value[n].data[1] == 'i')
     {
-        slcf->case_insensitive = 1;
+        filter_conf->case_insensitive = 1;
         n++;
     }
 
@@ -341,31 +478,27 @@ ngx_http_sorted_args_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     if (cf->args->nelts == n + 1) {
 
-        if (mode == NGX_HTTP_SORTED_ARGS_MODE_REMOVE && value[n].len == 1
-            && value[n].data[0] == '*')
-        {
-            slcf->mode = NGX_HTTP_SORTED_ARGS_MODE_CLEAR;
-            slcf->args_to_filter = NULL;
-            return NGX_CONF_OK;
-        }
-
-        if (mode == NGX_HTTP_SORTED_ARGS_MODE_KEEP && value[n].len == 1
-            && value[n].data[0] == '*')
-        {
-            slcf->mode = NGX_HTTP_SORTED_ARGS_MODE_OFF;
-            slcf->args_to_filter = NULL;
-            return NGX_CONF_OK;
+        if (value[n].len == 1 && value[n].data[0] == '*') {
+            filter_conf->mode = filter_conf->mode
+                                == NGX_HTTP_SORTED_ARGS_MODE_REMOVE
+                                ? NGX_HTTP_SORTED_ARGS_MODE_CLEAR
+                                : NGX_HTTP_SORTED_ARGS_MODE_OFF;
+            goto save;
         }
     }
 
-    slcf->args_to_filter = ngx_array_create(cf->pool,
-                                        cf->args->nelts - n,
-                                        sizeof(ngx_http_sorted_args_filter_t));
-    if (slcf->args_to_filter == NULL) {
+    filter_conf->args = ngx_array_create(
+        cf->pool, cf->args->nelts - n,
+        sizeof(ngx_http_sorted_args_filter_t));
+    if (filter_conf->args == NULL) {
         return NGX_CONF_ERROR;
     }
 
     for (i = n; i < cf->args->nelts; i++) {
+        if (value[i].len == 0) {
+            return "empty argument name is not allowed";
+        }
+
         wildcards = 0;
 
         for (j = 0; j < value[i].len; j++) {
@@ -403,16 +536,17 @@ ngx_http_sorted_args_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         }
 
         exists = 0;
-        filter = slcf->args_to_filter->elts;
+        filter = filter_conf->args->elts;
 
-        for (j = 0; j < slcf->args_to_filter->nelts; j++) {
+        for (j = 0; j < filter_conf->args->nelts; j++) {
 
             if (parsed.wildcard != filter[j].wildcard) {
                 continue;
             }
 
             if (ngx_http_sorted_args_str_eq(&parsed.name, &filter[j].name,
-                                            slcf->case_insensitive) == NGX_OK)
+                                            filter_conf->case_insensitive)
+                == NGX_OK)
             {
                 exists = 1;
                 break;
@@ -420,7 +554,7 @@ ngx_http_sorted_args_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         }
 
         if (!exists) {
-            filter = ngx_array_push(slcf->args_to_filter);
+            filter = ngx_array_push(filter_conf->args);
             if (filter == NULL) {
                 return NGX_CONF_ERROR;
             }
@@ -428,6 +562,28 @@ ngx_http_sorted_args_filter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
             *filter = parsed;
         }
     }
+
+save:
+
+#if (NGX_CONDITION)
+    if (slcf->filter == NULL || slcf->filter == NGX_CONF_UNSET_PTR) {
+        slcf->filter = ngx_array_create(cf->pool, 2,
+                                        sizeof(ngx_conf_condition_ptr_ctx_t));
+        if (slcf->filter == NULL) {
+            return NGX_CONF_ERROR;
+        }
+    }
+
+    condition_ctx = ngx_array_push(slcf->filter);
+    if (condition_ctx == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    condition_ctx->value = filter_conf;
+    condition_ctx->expr_id = expr_id;
+#else
+    slcf->filter = filter_conf;
+#endif
 
     return NGX_CONF_OK;
 }
@@ -478,7 +634,8 @@ ngx_http_sorted_args_str_cmp(ngx_str_t *one, ngx_str_t *two)
 
 
 static ngx_int_t
-ngx_http_sorted_args_match_filter(ngx_http_sorted_args_loc_conf_t *slcf,
+ngx_http_sorted_args_match_filter(
+    ngx_http_sorted_args_filter_conf_t *filter_conf,
     ngx_http_sorted_args_filter_t *filter, ngx_str_t *key)
 {
     ngx_str_t  part;
@@ -494,35 +651,36 @@ ngx_http_sorted_args_match_filter(ngx_http_sorted_args_loc_conf_t *slcf,
         part.len = filter->name.len;
 
         return ngx_http_sorted_args_str_eq(&part, &filter->name,
-                                           slcf->case_insensitive);
+                                           filter_conf->case_insensitive);
 
     case NGX_HTTP_SORTED_ARGS_FILTER_SUFFIX:
         part.data = key->data + key->len - filter->name.len;
         part.len = filter->name.len;
 
         return ngx_http_sorted_args_str_eq(&part, &filter->name,
-                                           slcf->case_insensitive);
+                                           filter_conf->case_insensitive);
 
     default:
         return ngx_http_sorted_args_str_eq(key, &filter->name,
-                                           slcf->case_insensitive);
+                                           filter_conf->case_insensitive);
     }
 }
 
 
 static ngx_int_t
-ngx_http_sorted_args_should_output_arg(ngx_http_sorted_args_loc_conf_t *slcf,
+ngx_http_sorted_args_should_output_arg(ngx_http_sorted_args_runtime_conf_t *rcf,
     ngx_http_sorted_args_arg_t *arg)
 {
-    ngx_http_sorted_args_filter_t  *filter;
-    ngx_int_t                       matched;
-    ngx_uint_t                      i;
+    ngx_http_sorted_args_filter_conf_t  *filter_conf;
+    ngx_http_sorted_args_filter_t       *filter;
+    ngx_int_t                            matched;
+    ngx_uint_t                           i;
 
-    if (slcf->clear_invalid_args && arg->key.len == 0) {
+    if (rcf->clear_invalid_args && arg->key.len == 0) {
         return NGX_DECLINED;
     }
 
-    if (slcf->clear_valueless_args
+    if (rcf->clear_valueless_args
         && (arg->key.len == arg->complete.len
             || (arg->key.len + 1 == arg->complete.len
                 && arg->complete.data[arg->key.len] == '=')))
@@ -531,22 +689,19 @@ ngx_http_sorted_args_should_output_arg(ngx_http_sorted_args_loc_conf_t *slcf,
     }
 
     matched = NGX_DECLINED;
+    filter_conf = rcf->filter;
 
-    if (slcf->mode == NGX_HTTP_SORTED_ARGS_MODE_OFF) {
+    if (filter_conf == NULL
+        || filter_conf->mode == NGX_HTTP_SORTED_ARGS_MODE_OFF)
+    {
         return NGX_OK;
     }
 
-    if (slcf->mode == NGX_CONF_UNSET_UINT
-        || slcf->args_to_filter == NGX_CONF_UNSET_PTR
-        || slcf->args_to_filter == NULL)
-    {
-        goto check_filter;
-    }
+    filter = filter_conf->args->elts;
 
-    filter = slcf->args_to_filter->elts;
-
-    for (i = 0; i < slcf->args_to_filter->nelts; i++) {
-        if (ngx_http_sorted_args_match_filter(slcf, &filter[i], &arg->key)
+    for (i = 0; i < filter_conf->args->nelts; i++) {
+        if (ngx_http_sorted_args_match_filter(filter_conf, &filter[i],
+                                              &arg->key)
             == NGX_OK)
         {
             matched = NGX_OK;
@@ -554,9 +709,7 @@ ngx_http_sorted_args_should_output_arg(ngx_http_sorted_args_loc_conf_t *slcf,
         }
     }
 
-check_filter:
-
-    if (slcf->mode == NGX_HTTP_SORTED_ARGS_MODE_KEEP) {
+    if (filter_conf->mode == NGX_HTTP_SORTED_ARGS_MODE_KEEP) {
         return matched;
     }
 
@@ -582,13 +735,13 @@ ngx_http_sorted_args_same_key(ngx_http_sorted_args_arg_t *one,
 
 
 static ngx_int_t
-ngx_http_sorted_args_dedupe_arg(ngx_http_sorted_args_loc_conf_t *slcf,
+ngx_http_sorted_args_dedupe_arg(ngx_http_sorted_args_runtime_conf_t *rcf,
     ngx_http_sorted_args_ctx_t *ctx, ngx_http_sorted_args_arg_t *arg)
 {
     ngx_http_sorted_args_arg_t  *other;
     ngx_queue_t                 *q;
 
-    if (slcf->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_OFF) {
+    if (rcf->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_OFF) {
         return NGX_OK;
     }
 
@@ -600,19 +753,19 @@ ngx_http_sorted_args_dedupe_arg(ngx_http_sorted_args_loc_conf_t *slcf,
 
         if (other == arg
             || ngx_http_sorted_args_same_key(arg, other) != NGX_OK
-            || ngx_http_sorted_args_should_output_arg(slcf, other)
+            || ngx_http_sorted_args_should_output_arg(rcf, other)
                != NGX_OK)
         {
             continue;
         }
 
-        if (slcf->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_FIRST
+        if (rcf->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_FIRST
             && other->index < arg->index)
         {
             return NGX_DECLINED;
         }
 
-        if (slcf->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_LAST
+        if (rcf->dedupe == NGX_HTTP_SORTED_ARGS_DEDUPE_LAST
             && other->index > arg->index)
         {
             return NGX_DECLINED;
@@ -645,18 +798,37 @@ ngx_http_sorted_args_cmp_args(const ngx_queue_t *one,
 static ngx_int_t
 ngx_http_sorted_args_process(ngx_http_request_t *r, ngx_str_t *result)
 {
-    ngx_http_sorted_args_loc_conf_t  *slcf;
-    ngx_http_sorted_args_ctx_t       *ctx;
-    ngx_http_sorted_args_arg_t       *arg;
-    u_char                           *ampersand, *equal, *last;
-    ngx_queue_t                      *q;
-    ngx_uint_t                        index;
-    u_char                           *p, *args;
-    size_t                            args_len;
+    ngx_http_sorted_args_loc_conf_t     *slcf;
+    ngx_http_sorted_args_runtime_conf_t  rcf;
+    ngx_http_sorted_args_ctx_t          *ctx;
+    ngx_http_sorted_args_arg_t          *arg;
+    u_char                              *ampersand, *equal, *last;
+    ngx_queue_t                         *next, *q;
+    ngx_uint_t                           index;
+    u_char                              *p, *args;
+    size_t                               args_len;
 
     slcf = ngx_http_get_module_loc_conf(r, ngx_http_sorted_args_module);
 
-    if (slcf->mode == NGX_HTTP_SORTED_ARGS_MODE_CLEAR) {
+#if (NGX_CONDITION)
+    rcf.filter = ngx_http_get_conditional_ptr_value(r, slcf->filter);
+    rcf.order = ngx_http_get_conditional_enum_value(r, slcf->order);
+    rcf.dedupe = ngx_http_get_conditional_enum_value(r, slcf->dedupe);
+    rcf.clear_valueless_args =
+        ngx_http_get_conditional_flag_value(r, slcf->clear_valueless_args);
+    rcf.clear_invalid_args =
+        ngx_http_get_conditional_flag_value(r, slcf->clear_invalid_args);
+#else
+    rcf.filter = slcf->filter;
+    rcf.order = slcf->order;
+    rcf.dedupe = slcf->dedupe;
+    rcf.clear_valueless_args = slcf->clear_valueless_args;
+    rcf.clear_invalid_args = slcf->clear_invalid_args;
+#endif
+
+    if (rcf.filter != NULL
+        && rcf.filter->mode == NGX_HTTP_SORTED_ARGS_MODE_CLEAR)
+    {
         result->len = 0;
         result->data = (u_char *) "";
         return NGX_OK;
@@ -715,23 +887,32 @@ ngx_http_sorted_args_process(ngx_http_request_t *r, ngx_str_t *result)
     }
 
     p = args;
-    for (q = (slcf->order == NGX_HTTP_SORTED_ARGS_ORDER_DESC)
-             ? ngx_queue_last(&ctx->args_queue)
-             : ngx_queue_head(&ctx->args_queue);
-         q != ngx_queue_sentinel(&ctx->args_queue);
-         q = (slcf->order == NGX_HTTP_SORTED_ARGS_ORDER_DESC)
-             ? ngx_queue_prev(q)
-             : ngx_queue_next(q))
-    {
+
+    if (rcf.order == NGX_HTTP_SORTED_ARGS_ORDER_DESC) {
+        q = ngx_queue_last(&ctx->args_queue);
+
+    } else {
+        q = ngx_queue_head(&ctx->args_queue);
+    }
+
+    for (/* void */; q != ngx_queue_sentinel(&ctx->args_queue); q = next) {
+
+        if (rcf.order == NGX_HTTP_SORTED_ARGS_ORDER_DESC) {
+            next = ngx_queue_prev(q);
+
+        } else {
+            next = ngx_queue_next(q);
+        }
+
         arg = ngx_queue_data(q, ngx_http_sorted_args_arg_t, queue);
 
-        if (ngx_http_sorted_args_should_output_arg(slcf, arg)
+        if (ngx_http_sorted_args_should_output_arg(&rcf, arg)
             != NGX_OK)
         {
             continue;
         }
 
-        if (ngx_http_sorted_args_dedupe_arg(slcf, ctx, arg)
+        if (ngx_http_sorted_args_dedupe_arg(&rcf, ctx, arg)
             != NGX_OK)
         {
             continue;
@@ -825,9 +1006,17 @@ ngx_http_sorted_args_handler(ngx_http_request_t *r)
 
     slcf = ngx_http_get_module_loc_conf(r, ngx_http_sorted_args_module);
 
+#if (NGX_CONDITION)
+    if (!ngx_http_get_conditional_flag_value(r, slcf->overwrite)
+        || r->args.len == 0)
+    {
+        return NGX_DECLINED;
+    }
+#else
     if (!slcf->overwrite || r->args.len == 0) {
         return NGX_DECLINED;
     }
+#endif
 
     rc = ngx_http_sorted_args_process(r, &result);
     if (rc != NGX_OK) {

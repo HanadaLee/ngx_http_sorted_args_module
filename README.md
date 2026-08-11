@@ -9,7 +9,7 @@ Sorting is bytewise and case-sensitive; the `-i` option only affects parameter f
 
 This is especially useful if you want to normalize the args to be used in a cache key, for example when used with the `proxy_cache_key` directive.
 
-It is also possible to remove or keep selected query parameters with the `sorted_args_remove_args` and `sorted_args_keep_args` directives.
+It is also possible to remove or keep selected query parameters with the `sorted_args_filter` directive.
 
 _This module is not distributed with the Nginx source. See [the installation instructions](#installation)._
 
@@ -54,7 +54,7 @@ http {
     access_log       logs/nginx-http_access.log main;
 
     location /filtered {
-      sorted_args_keep_args -i v _ time b;
+      sorted_args_filter keep -i v _ time b;
 
       proxy_set_header Host "static_files_server";
       proxy_pass http://localhost:8081;
@@ -93,84 +93,48 @@ Variables
 Directives
 ----------
 
-**sorted_args_remove_args**
+**sorted_args_filter**
 
-**Syntax:** `sorted_args_remove_args * | [-i] args ...;`
-
-**Default:** *-*
-
-**Context:** *http, server, location, if in location*
-
-List parameters to remove while using the `$sorted_args` variable. It cannot be configured in the same context as `sorted_args_keep_args`.
-
-Use `sorted_args_remove_args *;` to clear all arguments. This also replaces any remove or keep list inherited from an upper context.
-
-Optional **-i** parameter enables case-insensitive parameter matching.
-
-Argument names support exact matches, prefix wildcards, and suffix wildcards:
-- `token` matches only `token`
-- `utm_*` matches names starting with `utm_`
-- `*_sig` matches names ending with `_sig`
-- `''` (empty string) matches parameters with an empty key (value with no name)
-
-A single `*` has the special meaning above, so use a non-empty prefix or suffix when wildcard-filtering a remove list.
-
-Examples:
-```nginx
-# Remove 'token' and 'session' parameters
-sorted_args_remove_args token session;
-
-# Remove all parameters with an empty key
-sorted_args_remove_args '';
-
-# Remove parameters with either wildcard shape
-sorted_args_remove_args utm_* *_sig;
-
-# Remove parameters case-insensitively
-sorted_args_remove_args -i token session;
-
-# Clear all args
-sorted_args_remove_args *;
-```
-
-**sorted_args_keep_args**
-
-**Syntax:** `sorted_args_keep_args * | [-i] args ...;`
+**Syntax:** `sorted_args_filter off | keep [-i] args ... | remove [-i] args ...;`
 
 **Default:** *-*
 
-**Context:** *http, server, location, if in location*
+**Context:** *http, server, location, if in location, when*
 
-List parameters to keep while using the `$sorted_args` variable. All other parameters are removed. It cannot be configured in the same context as `sorted_args_remove_args`.
+Configures which parameters are retained while evaluating `$sorted_args` or overwriting the request arguments.
 
-Use `sorted_args_keep_args *;` to disable a remove or keep list inherited from an upper context.
+- `keep` retains matching parameters and removes all others
+- `remove` removes matching parameters and retains all others
+- `off` disables a filter inherited from an upper context
 
 Optional **-i** parameter enables case-insensitive parameter matching.
 
-Prefix and suffix wildcards are supported. A single `*` has the special meaning above, so use a non-empty prefix or suffix when wildcard-filtering a keep list.
+Argument names cannot be empty. They support exact matches, prefix wildcards, and suffix wildcards:
 
-The argument list supports the same matching rules as `sorted_args_remove_args`:
 - `token` matches only `token`
 - `utm_*` matches names starting with `utm_`
 - `*_sig` matches names ending with `_sig`
-- `''` (empty string) matches parameters with an empty key
+
+A single `*` must be the only argument name. `keep *` keeps every parameter,
+while `remove *` removes every parameter.
 
 Examples:
 ```nginx
 # Keep only 'id' and 'name' parameters (case-sensitive)
-sorted_args_keep_args id name;
+sorted_args_filter keep id name;
 
 # Keep only 'id' and 'name' parameters (case-insensitive)
-sorted_args_keep_args -i id name;
+sorted_args_filter keep -i id name;
 
-# Keep only parameters with an empty key
-sorted_args_keep_args '';
-
-# Keep only parameters beginning with 'public_'
-sorted_args_keep_args public_*;
+# Remove parameters with either wildcard shape
+sorted_args_filter remove utm_* *_sig;
 
 # Disable inherited filtering
-sorted_args_keep_args *;
+sorted_args_filter off;
+
+# Keep or remove every parameter
+sorted_args_filter keep *;
+sorted_args_filter remove *;
 ```
 
 **sorted_args_clear_valueless_args**
@@ -179,7 +143,7 @@ sorted_args_keep_args *;
 
 **Default:** *off*
 
-**Context:** *http, server, location, if in location*
+**Context:** *http, server, location, if in location, when*
 
 If enabled, removes parameters that have no value (e.g., `key` or `key=`).
 
@@ -199,7 +163,7 @@ sorted_args_clear_valueless_args on;
 
 **Default:** *off*
 
-**Context:** *http, server, location, if in location*
+**Context:** *http, server, location, if in location, when*
 
 If enabled, removes invalid parameters whose key is empty. This includes empty segments from consecutive ampersands (`&&`), a bare equals sign (`=`), and values with no key (`=value`).
 
@@ -217,7 +181,7 @@ sorted_args_clear_invalid_args on;
 
 **Default:** *asc*
 
-**Context:** *http, server, location, if in location*
+**Context:** *http, server, location, if in location, when*
 
 Controls the output sort order for `$sorted_args`.
 
@@ -235,7 +199,7 @@ sorted_args_order desc;
 
 **Default:** *off*
 
-**Context:** *http, server, location, if in location*
+**Context:** *http, server, location, if in location, when*
 
 Controls whether duplicate argument names are removed. `first` keeps the first occurrence in the original query string, `last` keeps the last occurrence, and `off` preserves all occurrences.
 
@@ -253,7 +217,7 @@ sorted_args_dedupe first;
 
 **Default:** *off*
 
-**Context:** *http, server, location, if in location*
+**Context:** *http, server, location, if in location, when*
 
 If enabled, overrides the original `$args` with the sorted and filtered result. This allows downstream modules and proxy_pass to use the sorted arguments directly.
 
@@ -264,7 +228,7 @@ location /api {
     sorted_args_overwrite on;
 
     # Keep only specific parameters
-    sorted_args_keep_args id name version;
+    sorted_args_filter keep id name version;
 
     # Clear valueless args
     sorted_args_clear_valueless_args on;
@@ -281,6 +245,31 @@ location /api {
 **Important:** If `sorted_args_overwrite` is enabled, the original query string is modified early in the request processing, affecting all subsequent phases.
 
 
+Conditional configuration
+-------------------------
+
+When [ngx_condition_module](https://git.hanada.info/hanada/ngx_condition_module)
+is enabled, every directive provided by this module can be placed inside an
+`http`, `server`, or `location` `when` block:
+
+```nginx
+condition mobile_client str_contains -i $http_user_agent mobile;
+
+when mobile_client {
+    sorted_args_filter remove tracking_id;
+    sorted_args_order desc;
+    sorted_args_dedupe first;
+    sorted_args_clear_valueless_args on;
+    sorted_args_clear_invalid_args on;
+    sorted_args_overwrite on;
+}
+```
+
+Rules are evaluated in configuration order. An unconditional value placed
+before a conditional value has higher priority. Use `sorted_args_filter off`
+inside a `when` block when that condition should disable an inherited filter.
+
+
 <a id="installation"></a>Installation Instructions
 --------------------------------------------------
 
@@ -291,6 +280,13 @@ location /api {
         --prefix=/home/user/dev-workspace/nginx
     $ make
     $ make install
+
+To enable conditional configuration, build `ngx_condition_module` before this
+module in the same Nginx configuration:
+
+    $ ./configure \
+        --add-module=../ngx_condition_module \
+        --add-module=../ngx_http_sorted_args_module
 
 
 Running Tests

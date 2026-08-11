@@ -6,10 +6,8 @@ module NginxConfiguration
       master_process: 'off',
       daemon: 'off',
 
-      remove_args: nil,
-      remove_args2: nil,
-      keep_args: nil,
-      keep_args2: nil,
+      filter: nil,
+      filter2: nil,
       clear_valueless_args: nil,
       clear_invalid_args: nil,
       order: nil,
@@ -43,8 +41,7 @@ http {
     listen        <%= nginx_port %>;
     server_name   <%= nginx_host %>;
 
-    <%= write_directive("sorted_args_remove_args", remove_args) %>
-    <%= write_directive("sorted_args_keep_args", keep_args) %>
+    <%= write_directive("sorted_args_filter", filter) %>
     <%= write_directive("sorted_args_clear_valueless_args", clear_valueless_args) %>
     <%= write_directive("sorted_args_clear_invalid_args", clear_invalid_args) %>
     <%= write_directive("sorted_args_order", order) %>
@@ -64,16 +61,14 @@ http {
     listen        <%= nginx_port %>;
     server_name   static_files_server;
 
-    <%= write_directive("sorted_args_remove_args", remove_args) %>
-    <%= write_directive("sorted_args_keep_args", keep_args) %>
+    <%= write_directive("sorted_args_filter", filter) %>
     <%= write_directive("sorted_args_clear_valueless_args", clear_valueless_args) %>
     <%= write_directive("sorted_args_clear_invalid_args", clear_invalid_args) %>
     <%= write_directive("sorted_args_order", order) %>
     <%= write_directive("sorted_args_dedupe", dedupe) %>
 
     location /overwrite {
-      <%= write_directive("sorted_args_remove_args", remove_args2) %>
-      <%= write_directive("sorted_args_keep_args", keep_args2) %>
+      <%= write_directive("sorted_args_filter", filter2) %>
 
       return 200 '{"args": "$args", "sorted_args": "$sorted_args"}';
     }

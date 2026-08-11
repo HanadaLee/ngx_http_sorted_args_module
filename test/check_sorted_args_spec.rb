@@ -67,7 +67,7 @@ describe "check sorted args module" do
   end
 
   it "should remove specified parameters" do
-    nginx_run_server({remove_args: ["c", "_"]}) do
+    nginx_run_server({filter: ["remove", "c", "_"]}) do
       EventMachine.run do
         req = EventMachine::HttpRequest.new("#{nginx_address}/?c=3&=6&a=1&=5&b=2&_=12323&c=7").get
         req.callback do
@@ -93,7 +93,7 @@ describe "check sorted args module" do
   end
 
   it "should not return error if all parameters were removed" do
-    nginx_run_server({remove_args: ["c", "_"]}) do
+    nginx_run_server({filter: ["remove", "c", "_"]}) do
       EventMachine.run do
         req = EventMachine::HttpRequest.new("#{nginx_address}/?c=3&_=12323&c=7").get
         req.callback do
@@ -106,7 +106,7 @@ describe "check sorted args module" do
   end
 
   it "should be possible use the variable as cache_key" do
-    nginx_run_server({remove_args: ["c", "_"]}) do
+    nginx_run_server({filter: ["remove", "c", "_"]}) do
       EventMachine.run do
         req = EventMachine::HttpRequest.new("#{nginx_address}/?c=3&=6&a=1&=5&b=2&_=12323&c=7").get
         req.callback do
@@ -125,7 +125,8 @@ describe "check sorted args module" do
   end
 
   it "should be possible overwrite the remove parameter list by each location" do
-    nginx_run_server({remove_args: ["c", "_"], remove_args2: ["a", "b"]}) do
+    nginx_run_server({filter: ["remove", "c", "_"],
+                      filter2: ["remove", "a", "b"]}) do
       EventMachine.run do
         req = EventMachine::HttpRequest.new("#{nginx_address}/?c=3&=6&a=1&=5&b=2&_=12323&c=7").get
         req.callback do
@@ -143,13 +144,13 @@ describe "check sorted args module" do
     end
   end
 
-  it "should remove empty key parameters with '' filter" do
-    nginx_run_server({remove_args: ["''"]}) do
+  it "should disable inherited filters with off" do
+    nginx_run_server({filter: ["remove", "c", "_"], filter2: ["off"]}) do
       EventMachine.run do
-        req = EventMachine::HttpRequest.new("#{nginx_address}/?c=3&=6&a=1&=5&b=2&_=12323&c=7").get
+        req = EventMachine::HttpRequest.new("#{nginx_address}/overwrite?c=3&=6&a=1&=5&b=2&_=12323&c=7").get
         req.callback do
           expect(req).to be_http_status(200)
-          expect(req.response).to be === '{"args": "c=3&=6&a=1&=5&b=2&_=12323&c=7", "sorted_args": "_=12323&a=1&b=2&c=3&c=7"}'
+          expect(req.response).to be === '{"args": "c=3&=6&a=1&=5&b=2&_=12323&c=7", "sorted_args": "=5&=6&_=12323&a=1&b=2&c=3&c=7"}'
           EventMachine.stop
         end
       end
@@ -157,7 +158,7 @@ describe "check sorted args module" do
   end
 
   it "should clear all parameters with remove wildcard all" do
-    nginx_run_server({remove_args: ["*"]}) do
+    nginx_run_server({filter: ["remove", "*"]}) do
       EventMachine.run do
         req = EventMachine::HttpRequest.new("#{nginx_address}/?c=3&=6&a=1&=5&b=2").get
         req.callback do
@@ -170,7 +171,7 @@ describe "check sorted args module" do
   end
 
   it "should disable inherited keep parameters with wildcard all" do
-    nginx_run_server({keep_args: ["a"], keep_args2: ["*"]}) do
+    nginx_run_server({filter: ["keep", "a"], filter2: ["keep", "*"]}) do
       EventMachine.run do
         req = EventMachine::HttpRequest.new("#{nginx_address}/overwrite?c=3&b=2&a=1").get
         req.callback do
@@ -183,7 +184,7 @@ describe "check sorted args module" do
   end
 
   it "should treat off as a regular remove parameter" do
-    nginx_run_server({remove_args: ["off"]}) do
+    nginx_run_server({filter: ["remove", "off"]}) do
       EventMachine.run do
         req = EventMachine::HttpRequest.new("#{nginx_address}/?c=3&off=1&a=1").get
         req.callback do
@@ -196,7 +197,7 @@ describe "check sorted args module" do
   end
 
   it "should treat all as a regular keep parameter" do
-    nginx_run_server({keep_args: ["all"]}) do
+    nginx_run_server({filter: ["keep", "all"]}) do
       EventMachine.run do
         req = EventMachine::HttpRequest.new("#{nginx_address}/?c=3&all=1&a=1").get
         req.callback do
@@ -209,7 +210,7 @@ describe "check sorted args module" do
   end
 
   it "should keep only specified parameters" do
-    nginx_run_server({keep_args: ["id", "name"]}) do
+    nginx_run_server({filter: ["keep", "id", "name"]}) do
       EventMachine.run do
         req = EventMachine::HttpRequest.new("#{nginx_address}/?token=abc&name=bob&id=123&extra=1").get
         req.callback do
@@ -221,8 +222,21 @@ describe "check sorted args module" do
     end
   end
 
+  it "should filter parameter names case-insensitively" do
+    nginx_run_server({filter: ["remove", "-i", "token"]}) do
+      EventMachine.run do
+        req = EventMachine::HttpRequest.new("#{nginx_address}/?Token=1&a=2&TOKEN=3").get
+        req.callback do
+          expect(req).to be_http_status(200)
+          expect(req.response).to be === '{"args": "Token=1&a=2&TOKEN=3", "sorted_args": "a=2"}'
+          EventMachine.stop
+        end
+      end
+    end
+  end
+
   it "should support wildcard parameters" do
-    nginx_run_server({remove_args: ["utm_*", "*_sig"]}) do
+    nginx_run_server({filter: ["remove", "utm_*", "*_sig"]}) do
       EventMachine.run do
         req = EventMachine::HttpRequest.new("#{nginx_address}/?utm_source=google&a=1&request_sig=abc&name=2&utm_medium=cpc").get
         req.callback do
