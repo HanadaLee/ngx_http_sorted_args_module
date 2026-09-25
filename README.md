@@ -248,12 +248,12 @@ location /api {
 Conditional configuration
 -------------------------
 
-When [ngx_condition_module](https://git.hanada.info/hanada/ngx_condition_module)
+When [ngx_expr_module](https://git.hanada.info/hanada/ngx_condition_module)
 is enabled, every directive provided by this module can be placed inside an
 `http`, `server`, or `location` `when` block:
 
 ```nginx
-condition mobile_client str_contains -i $http_user_agent mobile;
+expr mobile_client str_contains -i $http_user_agent mobile;
 
 when mobile_client {
     sorted_args_filter remove tracking_id;
@@ -281,11 +281,11 @@ inside a `when` block when that condition should disable an inherited filter.
     $ make
     $ make install
 
-To enable conditional configuration, build `ngx_condition_module` before this
+To enable conditional configuration, build `ngx_expr_module` before this
 module in the same Nginx configuration:
 
     $ ./configure \
-        --add-module=../ngx_condition_module \
+        --add-module=../ngx_expr_module \
         --add-module=../ngx_http_sorted_args_module
 
 

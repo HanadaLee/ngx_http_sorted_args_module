@@ -18,7 +18,7 @@ use Test::Nginx qw/ :DEFAULT http_content /;
 select STDERR; $| = 1;
 select STDOUT; $| = 1;
 
-my $t = Test::Nginx->new()->has(qw/http rewrite ngx_condition_module
+my $t = Test::Nginx->new()->has(qw/http rewrite ngx_expr_module
 	ngx_http_sorted_args_module/)->plan(14);
 
 $t->write_file_expand('nginx.conf', <<'EOF');
@@ -39,7 +39,7 @@ http {
         listen       127.0.0.1:8080;
         server_name  localhost;
 
-        condition descending str_eq $http_x_order desc;
+        expr descending str_eq $http_x_order desc;
 
         location /default {
             sorted_args_filter off;
